@@ -54,3 +54,13 @@ var_floor: 0.002
 log_weights: True
 
 name: "maic_qplex"
+
+# --- MVE-PG options ---
+mve_enabled: False
+mve_pretrain_steps: 0
+mve_train_steps: 0
+mve_unlearn_steps: 0
+mve_lambda: 0.0
+mve_hidden_dim: 64
+mve_lr: 0.0005
+mve_unlearn_lr: 0.0005

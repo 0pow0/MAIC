@@ -35,7 +35,7 @@ setup(
         'absl-py>=0.1.0',
         'numpy>=1.10',
         "gym==0.16.0", 
-        "pyglet>=1.5.11"
+        "pyglet>=1.5.0"
     ],
     package_data={'smac.env.lbforaging.foraging': ['icons/*.png']}
 )

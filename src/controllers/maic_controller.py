@@ -24,10 +24,21 @@ class MAICMAC:
         return chosen_actions
 
     def forward(self, ep_batch, t, test_mode=False, **kwargs):
+        return_mve = kwargs.pop("return_mve", False)
+        msg_mask = kwargs.pop("msg_mask", None)
         agent_inputs = self._build_inputs(ep_batch, t)
         avail_actions = ep_batch["avail_actions"][:, t]
-        agent_outs, self.hidden_states, losses = self.agent.forward(agent_inputs, self.hidden_states, ep_batch.batch_size, 
-            test_mode=test_mode, **kwargs)
+        agent_outs, self.hidden_states, losses = self.agent.forward(
+            agent_inputs,
+            self.hidden_states,
+            ep_batch.batch_size,
+            test_mode=test_mode,
+            msg_mask=msg_mask,
+            return_mve=return_mve,
+            **kwargs
+        )
+        if return_mve:
+            losses["mve_h"] = self.hidden_states.view(ep_batch.batch_size, self.n_agents, -1)
 
         # Softmax the agent outputs if they're policy logits
         if self.agent_output_type == "pi_logits":

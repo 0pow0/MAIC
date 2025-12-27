@@ -47,7 +47,7 @@ class MAICAgent(nn.Module):
     def init_hidden(self):
         return self.fc1.weight.new(1, self.args.rnn_hidden_dim).zero_()
     
-    def forward(self, inputs, hidden_state, bs, test_mode=False, **kwargs):
+    def forward(self, inputs, hidden_state, bs, test_mode=False, msg_mask=None, return_mve=False, **kwargs):
         x = F.relu(self.fc1(inputs))
         h_in = hidden_state.reshape(-1, self.args.rnn_hidden_dim)
         h = self.rnn(x, h_in)
@@ -70,6 +70,11 @@ class MAICAgent(nn.Module):
 
         h_repeat = h.view(bs, self.n_agents, -1).repeat(1, self.n_agents, 1).view(bs * self.n_agents * self.n_agents, -1)
         msg = self.msg_net(th.cat([h_repeat, latent], dim=-1)).view(bs, self.n_agents, self.n_agents, self.n_actions)
+        if msg_mask is not None:
+            msg_mask = msg_mask.to(msg.device)
+            if msg_mask.dim() == 2:
+                msg_mask = msg_mask.view(bs, self.n_agents, 1, 1)
+            msg = msg * msg_mask
         
         query = self.w_query(h).unsqueeze(1)
         key = self.w_key(latent).reshape(bs * self.n_agents, self.n_agents, -1).transpose(1, 2)
@@ -94,8 +99,18 @@ class MAICAgent(nn.Module):
                 key = self.w_key(latent.detach()).reshape(bs * self.n_agents, self.n_agents, -1).transpose(1, 2)
                 alpha = F.softmax(th.bmm(query, key), dim=-1).reshape(bs, self.n_agents, self.n_agents)
                 returns['entropy_loss'] = self.calculate_entropy_loss(alpha)
+        if return_mve:
+            returns['mve_msg'] = gated_msg
 
         return return_q, h, returns
+
+    def message_parameters(self):
+        return (
+            list(self.embed_net.parameters())
+            + list(self.msg_net.parameters())
+            + list(self.w_query.parameters())
+            + list(self.w_key.parameters())
+        )
 
     def calculate_action_mi_loss(self, h, bs, latent_embed, q):
         latent_embed = latent_embed.view(bs * self.n_agents, 2, self.n_agents, self.latent_dim)
