@@ -243,7 +243,8 @@ class MAICLearner:
         inputs = th.cat([h_flat, msg_flat], dim=-1).reshape(-1, h_flat.shape[-1] + msg_flat.shape[-1])
         preds = self.mve(inputs).view(bs, max_t - 1, n_agents, 1)
 
-        mask_expanded = mask.unsqueeze(2).unsqueeze(3).expand_as(preds)
+        # mask is [bs, max_t-1, 1], unsqueeze once to [bs, max_t-1, 1, 1], then expand to [bs, max_t-1, n_agents, 1]
+        mask_expanded = mask.unsqueeze(2).expand_as(preds)
         mse = (preds - delta_q.detach()) ** 2
         loss = (mse * mask_expanded).sum() / mask_expanded.sum()
 
@@ -276,7 +277,8 @@ class MAICLearner:
 
         msg_l1 = msg_flat.abs().sum(-1, keepdim=True)
         advantage = (v_hat - self.mve_lambda * msg_l1).detach()
-        mask_expanded = mask.unsqueeze(2).unsqueeze(3).expand_as(msg_l1)
+        # mask is [bs, max_t-1, 1], unsqueeze once to [bs, max_t-1, 1, 1], then expand to [bs, max_t-1, n_agents, 1]
+        mask_expanded = mask.unsqueeze(2).expand_as(msg_l1)
         unlearn_loss = -(advantage * msg_l1 * mask_expanded).sum() / mask_expanded.sum()
 
         self.unlearn_optimiser.zero_grad()
