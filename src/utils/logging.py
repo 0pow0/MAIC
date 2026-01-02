@@ -3,6 +3,12 @@ import logging
 import numpy as np
 from tensorboardX.writer import SummaryWriter
 
+try:
+    import wandb
+    WANDB_AVAILABLE = True
+except ImportError:
+    WANDB_AVAILABLE = False
+
 
 class Logger:
     def __init__(self, console_logger):
@@ -11,6 +17,7 @@ class Logger:
         self.use_tb = False
         self.use_sacred = False
         self.use_hdf = False
+        self.use_wandb = False
 
         self.stats = defaultdict(lambda: [])
 
