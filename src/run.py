@@ -60,6 +60,10 @@ def run(_run, _config, _log):
     # sacred is on by default
     logger.setup_sacred(_run)
 
+    # setup wandb if enabled
+    if args.use_wandb:
+        logger.setup_wandb(args)
+
     # Run and train
     run_sequential(args=args, logger=logger)
 
@@ -71,6 +75,9 @@ def run(_run, _config, _log):
         json_exp_direc = os.path.join(json_output_direc, unique_token + '.json')
         print(f'Export tensorboard scalars at {tb_exp_direc} to json file {json_exp_direc}')
         export_scalar_to_json(tb_exp_direc, json_output_direc, args)
+
+    # Finish wandb run
+    logger.finish()
 
     # Clean up after finishing
     print("Exiting Main")

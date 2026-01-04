@@ -72,7 +72,7 @@ class PredatorPreyEnv(MultiAgentEnv):
 
         # Vocabulary size for one-hot encoding
         # grid positions + outside + prey + predator
-        self.vocab_size = self.BASE + 1 + 1 + 1
+        self.vocab_size = self.PREDATOR_CLASS + 1
 
         # Observation shape: flattened vision grid with one-hot encoding
         self.obs_size = self.vocab_size * (2 * self.vision + 1) * (2 * self.vision + 1)
@@ -86,6 +86,7 @@ class PredatorPreyEnv(MultiAgentEnv):
         self._total_steps = 0
         self.battles_won = 0
         self.battles_game = 0
+        self.stat = {}  # IC3Net-style stats
 
         # Initialize
         self.predator_loc = None
@@ -99,6 +100,7 @@ class PredatorPreyEnv(MultiAgentEnv):
         self._episode_steps = 0
         self.episode_over = False
         self.reached_prey = np.zeros(self.n_predators)
+        self.stat = {}  # Reset stats
 
         # Random initial locations (no overlap)
         locs = self._get_coordinates()
@@ -117,6 +119,13 @@ class PredatorPreyEnv(MultiAgentEnv):
         self._total_steps += 1
         self._episode_steps += 1
 
+        # Accept torch tensors (possibly on GPU) and convert to numpy safely.
+        if hasattr(actions, "detach"):
+            actions = actions.detach()
+        if hasattr(actions, "cpu"):
+            actions = actions.cpu()
+        if hasattr(actions, "numpy"):
+            actions = actions.numpy()
         actions = np.array(actions).flatten()
 
         # Execute actions for each predator
@@ -197,54 +206,65 @@ class PredatorPreyEnv(MultiAgentEnv):
             self.predator_loc[idx][1] = new_pos
 
     def _get_reward(self):
-        """Calculate team reward."""
-        reward = self.TIMESTEP_PENALTY
+        """Calculate per-agent rewards (IC3Net style).
 
-        # Check which predators are on prey
-        on_prey = []
-        for i, pred_loc in enumerate(self.predator_loc):
-            for prey_loc in self.prey_loc:
-                if np.array_equal(pred_loc, prey_loc):
-                    on_prey.append(i)
-                    break
+        Returns:
+            float: Team reward (sum of per-agent rewards)
+        """
+        # IC3Net returns per-agent rewards, but MAIC expects team reward
+        # So we calculate per-agent rewards then sum them
+        n = self.n_predators
+        per_agent_reward = np.full(n, self.TIMESTEP_PENALTY)
 
-        nb_predator_on_prey = len(on_prey)
+        # Find which predators are on prey (single prey case)
+        on_prey = np.where(np.all(self.predator_loc == self.prey_loc[0], axis=1))[0]
+        nb_predator_on_prey = on_prey.size
 
         if self.mode == 'cooperative':
-            # Shared reward when any predator reaches prey
-            if nb_predator_on_prey > 0:
-                reward += self.PREY_REWARD * nb_predator_on_prey
+            # IC3Net: reward[on_prey] = POS_PREY_REWARD * nb_predator_on_prey
+            per_agent_reward[on_prey] = self.PREY_REWARD * nb_predator_on_prey
+        elif self.mode == 'competitive':
+            if nb_predator_on_prey:
+                per_agent_reward[on_prey] = self.PREY_REWARD / nb_predator_on_prey
         elif self.mode == 'mixed':
-            # Episode ends when all predators reach prey
-            if nb_predator_on_prey > 0:
-                reward += self.PREY_REWARD * nb_predator_on_prey
+            # IC3Net: reward[on_prey] = PREY_REWARD (which is 0 by default)
+            # But we use PREY_REWARD parameter
+            per_agent_reward[on_prey] += self.PREY_REWARD
 
         # Mark predators that reached prey
-        for i in on_prey:
-            self.reached_prey[i] = 1
+        self.reached_prey[on_prey] = 1
 
         # Episode over when all predators reached prey (mixed mode)
         if self.mode == 'mixed' and np.all(self.reached_prey == 1):
             self.episode_over = True
 
-        return reward
+        # Track success (IC3Net stat)
+        if self.mode != 'competitive':
+            self.stat['success'] = 1 if nb_predator_on_prey == self.n_predators else 0
+
+        # MAIC expects team reward (sum of per-agent rewards)
+        return float(np.sum(per_agent_reward))
 
     def get_obs(self):
         """Return observations for all agents."""
         return [self.get_obs_agent(i) for i in range(self.n_agents)]
 
     def get_obs_agent(self, agent_id):
-        """Return observation for a specific agent."""
+        """Return observation for a specific agent.
+
+        IC3Net returns 3D: (vocab_size, 2*vision+1, 2*vision+1)
+        MAIC needs flattened: (vocab_size * (2*vision+1) * (2*vision+1),)
+        """
         # Create grid with agent positions
         bool_base_grid = self.empty_bool_base_grid.copy()
 
-        # Mark predators
+        # Mark predators (IC3Net uses +=, allows counting overlaps)
         for i, p in enumerate(self.predator_loc):
-            bool_base_grid[p[0] + self.vision, p[1] + self.vision, self.PREDATOR_CLASS] = 1
+            bool_base_grid[p[0] + self.vision, p[1] + self.vision, self.PREDATOR_CLASS] += 1
 
         # Mark prey
         for p in self.prey_loc:
-            bool_base_grid[p[0] + self.vision, p[1] + self.vision, self.PREY_CLASS] = 1
+            bool_base_grid[p[0] + self.vision, p[1] + self.vision, self.PREY_CLASS] += 1
 
         # Extract vision window for this agent
         p = self.predator_loc[agent_id]
@@ -252,7 +272,11 @@ class PredatorPreyEnv(MultiAgentEnv):
         slice_x = slice(p[1], p[1] + (2 * self.vision) + 1)
         obs = bool_base_grid[slice_y, slice_x]
 
-        return obs.flatten()
+        # Transpose to match IC3Net shape: (vocab_size, H, W)
+        obs = np.transpose(obs, (2, 0, 1))
+
+        # Flatten for MAIC (expects 1D observations)
+        return obs.flatten().astype(np.float32)
 
     def get_obs_size(self):
         """Return observation size."""
@@ -295,12 +319,15 @@ class PredatorPreyEnv(MultiAgentEnv):
         }
 
     def get_stats(self):
-        """Return environment statistics."""
+        """Return environment statistics (IC3Net compatible)."""
         stats = {
             "battles_won": self.battles_won,
             "battles_game": self.battles_game,
             "win_rate": self.battles_won / max(1, self.battles_game),
         }
+        # Include IC3Net stat if available
+        if 'success' in self.stat:
+            stats['success'] = self.stat['success']
         return stats
 
     def render(self):

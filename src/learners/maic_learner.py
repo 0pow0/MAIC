@@ -48,13 +48,14 @@ class MAICLearner:
 
         logs = []
         losses = []
+        alphas = []
 
         # Calculate estimated Q-Values
         mac_out = []
         self.mac.init_hidden(batch.batch_size)
 
         for t in range(batch.max_seq_length):
-            agent_outs, returns_ = self.mac.forward(batch, t=t, 
+            agent_outs, returns_ = self.mac.forward(batch, t=t,
                 prepare_for_logging=prepare_for_logging,
                 train_mode=True,
                 mixer=self.target_mixer,
@@ -63,6 +64,9 @@ class MAICLearner:
             if prepare_for_logging and 'logs' in returns_:
                 logs.append(returns_['logs'])
                 del returns_['logs']
+            if prepare_for_logging and 'alpha' in returns_:
+                alphas.append(returns_['alpha'])
+                del returns_['alpha']
             losses.append(returns_)
 
         mac_out = th.stack(mac_out, dim=1)  # Concat over time
@@ -132,8 +136,12 @@ class MAICLearner:
             self.logger.log_stat("td_error_abs", (masked_td_error.abs().sum().item()/mask_elems), t_env)
             self.logger.log_stat("q_taken_mean", (chosen_action_qvals * mask).sum().item()/(mask_elems * self.args.n_agents), t_env)
             self.logger.log_stat("target_mean", (targets * mask).sum().item()/(mask_elems * self.args.n_agents), t_env)
-            
+
             self._log_for_loss(loss_dict, t_env)
+
+            # Log communication rate
+            if len(alphas) > 0:
+                self._log_comm_rate(alphas, mask, t_env)
 
             self.log_stats_t = t_env
 
@@ -153,6 +161,45 @@ class MAICLearner:
     def _log_for_loss(self, losses: dict, t):
         for k, v in losses.items():
             self.logger.log_stat(k, v.item(), t)
+
+    def _log_comm_rate(self, alphas: list, mask, t_env):
+        """
+        Log communication rate metrics.
+        alphas: list of attention weight tensors, each of shape (bs, n_agents, n_agents)
+        """
+        # Stack alphas across time: (time_steps, bs, n_agents, n_agents)
+        alphas_tensor = th.stack(alphas[:-1], dim=0)  # Exclude last timestep to match mask
+
+        # Communication happens when attention weight > threshold
+        # During training, all alpha > 0 indicates communication
+        # We use a small threshold to account for numerical precision
+        comm_threshold = 1e-6
+        comm_active = (alphas_tensor > comm_threshold).float()
+
+        # Mask out diagonal (agents don't communicate with themselves)
+        for i in range(self.args.n_agents):
+            comm_active[:, :, i, i] = 0
+
+        # Calculate communication rate per agent (average over teammates)
+        # Shape: (time_steps, bs, n_agents)
+        comm_rate_per_agent = comm_active.sum(dim=-1) / (self.args.n_agents - 1)
+
+        # Average over time and batch, weighted by mask
+        # Reshape mask to match: (time_steps, bs)
+        mask_reshaped = mask[:, :, 0].transpose(0, 1)  # (bs, time_steps) -> (time_steps, bs)
+        mask_expanded = mask_reshaped.unsqueeze(-1).expand_as(comm_rate_per_agent)
+
+        # Compute masked average
+        comm_rate_mean = (comm_rate_per_agent * mask_expanded).sum() / mask_expanded.sum()
+
+        # Log average communication rate
+        self.logger.log_stat("comm_rate", comm_rate_mean.item(), t_env)
+
+        # Optionally log per-agent communication rates
+        if hasattr(self.args, 'log_per_agent_comm_rate') and self.args.log_per_agent_comm_rate:
+            for agent_id in range(self.args.n_agents):
+                agent_comm_rate = (comm_rate_per_agent[:, :, agent_id] * mask_reshaped).sum() / mask_reshaped.sum()
+                self.logger.log_stat(f"comm_rate_agent_{agent_id}", agent_comm_rate.item(), t_env)
 
     def _update_targets(self):
         self.target_mac.load_state(self.mac)

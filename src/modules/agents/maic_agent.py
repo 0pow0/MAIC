@@ -95,6 +95,10 @@ class MAICAgent(nn.Module):
                 alpha = F.softmax(th.bmm(query, key), dim=-1).reshape(bs, self.n_agents, self.n_agents)
                 returns['entropy_loss'] = self.calculate_entropy_loss(alpha)
 
+        # Return attention weights for communication rate tracking
+        if 'prepare_for_logging' in kwargs and kwargs['prepare_for_logging']:
+            returns['alpha'] = alpha.detach()
+
         return return_q, h, returns
 
     def calculate_action_mi_loss(self, h, bs, latent_embed, q):

@@ -31,6 +31,29 @@ class Logger:
         self.sacred_info = sacred_run_dict.info
         self.use_sacred = True
 
+    def setup_wandb(self, args):
+        if not WANDB_AVAILABLE:
+            self.console_logger.warning("wandb is not installed. Install with: pip install wandb")
+            return
+
+        # Build config dict from args
+        config = vars(args) if hasattr(args, '__dict__') else args
+
+        # Get wandb settings from args
+        project = getattr(args, 'wandb_project', 'MAIC')
+        entity = getattr(args, 'wandb_entity', None)
+        run_name = getattr(args, 'wandb_run_name', None)
+
+        wandb.init(
+            project=project,
+            entity=entity,
+            name=run_name,
+            config=config,
+            reinit=True
+        )
+        self.use_wandb = True
+        self.console_logger.info(f"Wandb initialized. Project: {project}, Run: {wandb.run.name}")
+
     def log_stat(self, key, value, t, to_sacred=True):
         self.stats[key].append((t, value))
 
@@ -44,12 +67,24 @@ class Logger:
             else:
                 self.sacred_info["{}_T".format(key)] = [t]
                 self.sacred_info[key] = [value]
-    
+
+        if self.use_wandb:
+            wandb.log({key: value, "timestep": t}, step=t)
+
     def log_histogram(self, key, value, t):
-        self.writer.add_histogram(key, value, t)
+        if self.use_tb:
+            self.writer.add_histogram(key, value, t)
+
+        if self.use_wandb:
+            wandb.log({key: wandb.Histogram(value.cpu().numpy() if hasattr(value, 'cpu') else value)}, step=t)
 
     def log_embedding(self, key, value):
-        self.writer.add_embedding(value, tag=key)
+        if self.use_tb:
+            self.writer.add_embedding(value, tag=key)
+
+    def finish(self):
+        if self.use_wandb:
+            wandb.finish()
 
     def print_recent_stats(self):
         log_str = "Recent Stats | t_env: {:>10} | Episode: {:>8}\n".format(*self.stats["episode"][-1])
