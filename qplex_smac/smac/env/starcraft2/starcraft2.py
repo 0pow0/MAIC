@@ -1190,6 +1190,33 @@ class StarCraft2Env(MultiAgentEnv):
                     type_id = 1
                 else:
                     type_id = 2
+            elif self.map_type == "zerg_queen":
+                if unit.unit_type == 105:
+                    type_id = 0
+                elif unit.unit_type == 126:
+                    type_id = 1
+            elif self.map_type == "MM_queen":
+                # queen
+                type_id = 0
+            elif self.map_type == "overload_zergling":
+                # zergling
+                type_id = 0
+            elif self.map_type == "overload_roach":
+                # roach
+                type_id = 0
+            elif self.map_type == "overload_bane":
+                # baneling
+                type_id = 0
+            elif self.map_type == "bZ_hM":
+                if unit.unit_type == 107:
+                    # hydralisk
+                    type_id = 0
+                else:
+                    # medivacs
+                    type_id = 1
+            elif self.map_type == "zMz":
+                # zergling
+                type_id = 0
 
         return type_id
 
